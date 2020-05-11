@@ -8,6 +8,7 @@ using System.Text;
 using System.Data;
 using System.Collections.Generic;
 using System.Linq;
+using NetworkedAudioClient.Dialogs;
 
 namespace NetworkedAudioClient.Forms
 {
@@ -80,13 +81,44 @@ namespace NetworkedAudioClient.Forms
 
         private void StartButton_Click(object sender, EventArgs e)
         {
-            if(InputDevicesComboBox.SelectedItem == null || OutputDevicesComboBox.SelectedItem == null)
+            if (InputDevicesComboBox.SelectedItem == null || OutputDevicesComboBox.SelectedItem == null)
             {
                 MessageBox.Show("select a device, dummy", "Error!", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 return;
             }
+            if (DiscoveredDevices.SelectedItem == null)
+            {
+                MessageBox.Show("select an endpoint, dummy", "Error!", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
 
-            transmitForm = new TransmitForm((MMDevice)InputDevicesComboBox.SelectedItem, (MMDevice)OutputDevicesComboBox.SelectedItem, MuteAudioCheckBox.Checked, (int)BitrateUpDown.Value);
+            IPEndPoint requested = null;
+            foreach (var client in names)
+            {
+                if (client.Value == (string)DiscoveredDevices.SelectedItem)
+                {
+                    requested = addresses[client.Key];
+                    requested.Port = 4321;
+                }
+            }
+            if (requested == null)
+            {
+                MessageBox.Show("application error, refresh the list and try again", "Error!", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+
+            var handshake = new HandshakeDialog(new UdpClient(), requested, NicknameTextBox.Text);
+            var result = handshake.ShowDialog();
+            if (result == DialogResult.Abort)
+            {
+                MessageBox.Show("handshake error", "Error!", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+            if (result == DialogResult.Cancel)
+            {
+                return;
+            }
+            transmitForm = new TransmitForm((MMDevice)InputDevicesComboBox.SelectedItem, (MMDevice)OutputDevicesComboBox.SelectedItem, MuteAudioCheckBox.Checked, (int)BitrateUpDown.Value, handshake.socket, requested, handshake.sessionID, handshake.localPair, handshake.remotePublicKey);
             this.Hide();
             transmitForm.ShowDialog();
             this.Show();
@@ -118,29 +150,36 @@ namespace NetworkedAudioClient.Forms
             IPEndPoint remoteEndpoint = new IPEndPoint(IPAddress.Any, 50);
             while (true)
             {
-                byte[] data = client.Receive(ref remoteEndpoint);
-                if (data.Length >= 12)
+                try
                 {
-                    try
+                    byte[] data = client.Receive(ref remoteEndpoint);
+                    if (data.Length >= 12)
                     {
-                        var code = Encoding.ASCII.GetString(data.Take(3).ToArray());
-                        if(code != "Hey")
+                        try
                         {
+                            var code = Encoding.ASCII.GetString(data.Take(3).ToArray());
+                            if (code != "Hey")
+                            {
+                                continue;
+                            }
+                            var id = BitConverter.ToInt64(data.Skip(3).Take(8).ToArray(), 0);
+                            var name = Encoding.ASCII.GetString(data.Skip(11).ToArray());
+                            names[id] = name;
+                            addresses[id] = remoteEndpoint;
+                            DiscoveryWorker.ReportProgress(1);
+                            DiscoveryWorker.ReportProgress(0);
+                        }
+                        catch
+                        {
+                            Console.WriteLine("got an invalid packet");
                             continue;
                         }
-                        var id = BitConverter.ToInt64(data.Skip(3).Take(8).ToArray(), 0);
-                        var name = Encoding.ASCII.GetString(data.Skip(11).ToArray());
-                        names[id] = name;
-                        addresses[id] = remoteEndpoint;
-                        DiscoveryWorker.ReportProgress(1);
-                        DiscoveryWorker.ReportProgress(0);
-                    }
-                    catch
-                    {
-                        Console.WriteLine("got an invalid packet");
-                        continue;
-                    }
 
+                    }
+                }
+                catch
+                {
+                    return;
                 }
             }
         }
