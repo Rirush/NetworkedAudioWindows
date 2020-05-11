@@ -1,8 +1,8 @@
-# What is this
+# Networked Audio Windows edition
 
 An audio bridge that works over the internet
 
-## Why
+## Why in the first place?
 
 Because I can
 
